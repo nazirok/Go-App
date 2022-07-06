@@ -1,0 +1,61 @@
+{
+    "responses": [
+        {
+            "id": "c48bc768-80c2-ff21-17d8-d339c88cbcce",
+            "request": {
+                "method": "POST",
+                "url": "http://google.com"
+            },
+            "response": {
+                "headers": {
+                    "Content-Length": 1589,
+                    "Content-Type": "text/html; charset=UTF-8"
+                },
+                "length": 1589,
+                "status": 405
+            }
+        },
+        {
+            "id": "f88a04a7-e6a9-7530-3a0c-4035ea58299b",
+            "request": {
+                "body": {
+                    "Authentication": "BasicbG9naW46cGFzc3dvcmQ=",
+                    "Content-Type": "application/json"
+                },
+                "headers": {
+                    "Authentication": "BasicbG9naW46cGFzc3dvcmQ=",
+                    "Content-Type": "application/json"
+                },
+                "method": "POST",
+                "url": "http://google.com"
+            },
+            "response": {
+                "headers": {
+                    "Content-Length": 1589,
+                    "Content-Type": "text/html; charset=UTF-8"
+                },
+                "length": 1589,
+                "status": 405
+            }
+        },
+        {
+            "id": "f42cc8cb-6357-4e4a-108c-f249377d0e77",
+            "request": {
+                "headers": {
+                    "Authentication": "BasicbGadad9naW46cGFzc3dvcmQ=",
+                    "Content-Type": "application/json"
+                },
+                "method": "POST",
+                "url": "http://youtube.com"
+            },
+            "response": {
+                "headers": {
+                    "Content-Length": -1,
+                    "Content-Type": "text/html; charset=utf-8"
+                },
+                "length": -1,
+                "status": 400
+            }
+        }
+    ]
+}
