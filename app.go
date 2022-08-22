@@ -38,41 +38,37 @@ type ReqId struct {
 	Id string
 }
 
-func addInfo(data MainReq) {
+func addInfo(data MainReq, sqlInstance *sql.DB) error {
 	/*
 		Добавляет запрос в БД
 	*/
 
+	var ErrorAddInfo error
 	var headersResp, reqErr = json.Marshal(data.Response.Headers)
 	if reqErr != nil {
-		log.Fatal(reqErr)
+		ErrorAddInfo = reqErr
 	}
 	var headersReq, respErr = json.Marshal(data.Request.Headers)
 	if respErr != nil {
-		log.Fatal(respErr)
+		ErrorAddInfo = respErr
 	}
 
 	var body, bodyErr = json.Marshal(data.Request.Body)
 	if bodyErr != nil {
-		log.Fatal(bodyErr)
-	}
-
-	db, sqlOpenError := sql.Open("sqlite3", dbName)
-
-	if sqlOpenError != nil {
-		log.Fatal(sqlOpenError)
+		ErrorAddInfo = bodyErr
 	}
 
 	records := `INSERT INTO req_and_response(IdReq, HeadersResp, Length, Status, HeadersReq, Body, Method, Url) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-	query, prepareError := db.Prepare(records)
+	query, prepareError := sqlInstance.Prepare(records)
 	if prepareError != nil {
-		log.Fatal(prepareError)
+		ErrorAddInfo = prepareError
 	}
 
 	_, execError := query.Exec(data.Id, headersResp, data.Response.Length, data.Response.Status, headersReq, body, data.Request.Method, data.Request.Url)
 	if execError != nil {
-		log.Fatal(execError)
+		ErrorAddInfo = execError
 	}
+	return ErrorAddInfo
 }
 
 func uuid() string {
@@ -91,16 +87,10 @@ func uuid() string {
 	return uuid
 }
 
-func createTable() {
+func createTable(sqlInstance *sql.DB) {
 	/*
 		Создает таблицу req_and_response
 	*/
-
-	db, sqlOpenError := sql.Open("sqlite3", dbName)
-
-	if sqlOpenError != nil {
-		log.Fatal(sqlOpenError)
-	}
 
 	users_table := `CREATE TABLE req_and_response (
         id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -112,7 +102,7 @@ func createTable() {
         "Body" BLOB,
         "Method" TEXT,
         "Url" TEXT);`
-	query, prepareError := db.Prepare(users_table)
+	query, prepareError := sqlInstance.Prepare(users_table)
 	if prepareError != nil {
 		log.Fatal(prepareError)
 	}
@@ -125,19 +115,13 @@ func createTable() {
 	fmt.Println("Table created successfully!")
 }
 
-func fetchRequests() []map[string]any {
+func fetchRequests(sqlInstance *sql.DB) []map[string]any {
 	/*
 		Выкачивает всю инфу из БД
 	*/
 
-	db, sqlOpenError := sql.Open("sqlite3", dbName)
-
-	if sqlOpenError != nil {
-		log.Fatal(sqlOpenError)
-	}
-
 	var results []map[string]any
-	record, queryError := db.Query("SELECT * FROM req_and_response")
+	record, queryError := sqlInstance.Query("SELECT * FROM req_and_response")
 
 	if queryError != nil {
 		log.Fatal(queryError)
@@ -184,24 +168,19 @@ func fetchRequests() []map[string]any {
 
 }
 
-func removeInfo(id string) bool {
+func removeInfo(id string, sqlInstance *sql.DB) bool {
 	/*
 		Удаляет запрос из Бд по id
 	*/
 
-	var idDb = IdFromDb(id)
+	var idDb = IdFromDb(id, sqlInstance)
 	if idDb == -1 {
 		return false
 	} else {
-		db, sqlOpenError := sql.Open("sqlite3", dbName)
-
-		if sqlOpenError != nil {
-			log.Fatal(sqlOpenError)
-		}
 
 		var deleteReq = fmt.Sprintf("delete from req_and_response where id = %d", idDb)
 		fmt.Println("deleteReq: ", deleteReq)
-		_, execError := db.Exec(deleteReq)
+		_, execError := sqlInstance.Exec(deleteReq)
 
 		if execError != nil {
 			log.Fatal(execError)
@@ -266,12 +245,12 @@ func jsonResp(data map[string]any) []byte {
 
 }
 
-func searchById(id string) []byte {
+func searchById(id string, sqlInstance *sql.DB) []byte {
 	/*
 		Делает поиск внутри БД по id, если id совпадают, возвращает сохраненный с ним request+response
 	*/
 
-	var requests = fetchRequests()
+	var requests = fetchRequests(sqlInstance)
 
 	for _, requestIter := range requests {
 		if requestIter["IdReq"] == id {
@@ -283,12 +262,12 @@ func searchById(id string) []byte {
 
 }
 
-func IdFromDb(id string) int {
+func IdFromDb(id string, sqlInstance *sql.DB) int {
 	/*
 		Делает поиск внутри БД по id, если id совпадают, возвращает id строки из БД
 	*/
 
-	var requests = fetchRequests()
+	var requests = fetchRequests(sqlInstance)
 
 	for _, requestIter := range requests {
 		if requestIter["IdReq"] == id {
@@ -301,14 +280,14 @@ func IdFromDb(id string) int {
 
 }
 
-func CacheLRU(request Request) []byte {
+func CacheLRU(request Request, sqlInstance *sql.DB) ([]byte, error) {
 	/*
 		Проверяет, существует ли подобный request в БД, если да, возвращает request+response
 	*/
-
+	var ErrorCacheLRU error
 	var headers = fmt.Sprintf("%s", request.Headers)
 	var body = fmt.Sprintf("%s", request.Body)
-	var requests = fetchRequests()
+	var requests = fetchRequests(sqlInstance)
 	for _, requestIter := range requests {
 		var methodLocal = (requestIter["Method"]).(string)
 		var urlLocal = (requestIter["Url"]).(string)
@@ -320,7 +299,7 @@ func CacheLRU(request Request) []byte {
 		var unmarshalError = json.Unmarshal(requestIter["Body"].([]byte), &bodyLocal)
 
 		if unmarshalError != nil {
-			log.Fatal(unmarshalError)
+			ErrorCacheLRU = unmarshalError
 		}
 
 		var headerstLocalString = fmt.Sprintf("%s", headerstLocal)
@@ -329,16 +308,16 @@ func CacheLRU(request Request) []byte {
 			if urlLocal == request.Url {
 				if GetMD5Hash(headerstLocalString) == GetMD5Hash(headers) {
 					if GetMD5Hash(bodyLocalString) == GetMD5Hash(body) {
-						return jsonResp(requestIter)
+						return jsonResp(requestIter), ErrorCacheLRU
 					} else if len(body) == 0 && bodyLocal == nil {
-						return jsonResp(requestIter)
+						return jsonResp(requestIter), ErrorCacheLRU
 					}
 
 				} else if len(headers) == 0 && headerstLocal == nil {
 					if GetMD5Hash(bodyLocalString) == GetMD5Hash(body) {
-						return jsonResp(requestIter)
+						return jsonResp(requestIter), ErrorCacheLRU
 					} else if len(body) == 0 && bodyLocal == nil {
-						return jsonResp(requestIter)
+						return jsonResp(requestIter), ErrorCacheLRU
 					}
 
 				}
@@ -349,20 +328,17 @@ func CacheLRU(request Request) []byte {
 
 	}
 
-	return nil
+	return nil, ErrorCacheLRU
 
 }
 
-func methodPost(decoder []byte, responseWriter http.ResponseWriter) {
-	/*
-		Метод возвращает response по отправленным данным
-	*/
+func methodPost(decoder []byte, responseWriter http.ResponseWriter, sqlInstance *sql.DB) error {
 
 	var jsonReq = Request{}
 	var unmarshalError = json.Unmarshal(decoder, &jsonReq)
 
 	if unmarshalError != nil {
-		log.Fatal(unmarshalError)
+		return unmarshalError
 	}
 
 	var body = map[string]string{}
@@ -383,69 +359,88 @@ func methodPost(decoder []byte, responseWriter http.ResponseWriter) {
 	var url = jsonReq.Url
 
 	var jsR = Request{Method: jsonReq.Method, Url: url, Headers: jsonReq.Headers, Body: jsonReq.Body}
-	var cacheLRU = CacheLRU(jsR)
+	var cacheLRU, ErrorCacheLRU = CacheLRU(jsR, sqlInstance)
+	if ErrorCacheLRU != nil {
+		return ErrorCacheLRU
+	}
 	if cacheLRU == nil {
 		var uuidForReq = uuid()
-		var httpResponse = HttpRequest(method, url, headers, body)
-		var contentType = httpResponse.Header["Content-Type"][0]
-		var secondHeaders = map[string]any{"Content-Length": httpResponse.ContentLength, "Content-Type": contentType}
-		var response = map[string]any{"status": httpResponse.StatusCode, "headers": secondHeaders, "length": httpResponse.ContentLength, "id": uuidForReq}
-		var headersData = MainReq{Id: uuidForReq, Request: Request{Headers: headers, Body: body, Method: method, Url: url},
-			Response: Response{Headers: secondHeaders, Length: int(httpResponse.ContentLength), Status: httpResponse.StatusCode}}
-		addInfo(headersData)
-		var dataToWatch, jsonError = json.MarshalIndent(response, "", "    ")
+		var httpResponse, ErrorHttpRequest = HttpRequest(method, url, headers, body)
+		if ErrorHttpRequest != nil {
+			return ErrorHttpRequest
+		}
+		if httpResponse.StatusCode != 400 {
+			var contentType = httpResponse.Header["Content-Type"][0]
+			var secondHeaders = map[string]any{"Content-Length": httpResponse.ContentLength, "Content-Type": contentType}
+			var response = map[string]any{"status": httpResponse.StatusCode, "headers": secondHeaders, "length": httpResponse.ContentLength, "id": uuidForReq}
+			var headersData = MainReq{Id: uuidForReq, Request: Request{Headers: headers, Body: body, Method: method, Url: url},
+				Response: Response{Headers: secondHeaders, Length: int(httpResponse.ContentLength), Status: httpResponse.StatusCode}}
+			ErrorAddInfo := addInfo(headersData, sqlInstance)
+			if ErrorAddInfo != nil {
+				return ErrorAddInfo
+			}
 
-		if jsonError != nil {
-			log.Fatal(jsonError)
+			var dataToWatch, jsonError = json.MarshalIndent(response, "", "    ")
+
+			if jsonError != nil {
+				return jsonError
+			}
+
+			_, writeError := responseWriter.Write(dataToWatch)
+			if writeError != nil {
+				return writeError
+			}
+
+			responseWriter.WriteHeader(200)
+		} else {
+
+			responseWriter.WriteHeader(400)
+			http.Error(responseWriter, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		}
 
-		_, writeError := responseWriter.Write(dataToWatch)
-		if writeError != nil {
-			log.Fatal(writeError)
-		}
-
-		responseWriter.WriteHeader(200)
 	} else {
 		_, writeError2 := responseWriter.Write(cacheLRU)
 		if writeError2 != nil {
-			log.Fatal(writeError2)
+			return writeError2
 		}
 
 		responseWriter.WriteHeader(200)
 	}
+	return nil
 
 }
 
-func methodGet(decoder []byte, responseWriter http.ResponseWriter) {
+func methodGet(decoder []byte, responseWriter http.ResponseWriter, sqlInstance *sql.DB) error {
 	/*
-		Метод возвращает request+response по id
+		Метод возвращает request по id
 	*/
 
 	var jsonReq = ReqId{}
 	unmarshalError := json.Unmarshal(decoder, &jsonReq)
 	if unmarshalError != nil {
-		log.Fatal(unmarshalError)
+		return unmarshalError
 	}
 
 	if jsonReq.Id == "" {
 		http.Error(responseWriter, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 	} else {
-		var text = searchById(jsonReq.Id)
+		var text = searchById(jsonReq.Id, sqlInstance)
 		if text == nil {
 			http.Error(responseWriter, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		} else {
 			_, writeError := responseWriter.Write(text)
 			if writeError != nil {
-				log.Fatal(writeError)
+				return writeError
 			}
 
 			responseWriter.WriteHeader(200)
 		}
 	}
+	return nil
 
 }
 
-func methodDelete(decoder []byte, responseWriter http.ResponseWriter) {
+func methodDelete(decoder []byte, responseWriter http.ResponseWriter, sqlInstance *sql.DB) error {
 	/*
 		Метод удаляет request по id
 	*/
@@ -453,14 +448,14 @@ func methodDelete(decoder []byte, responseWriter http.ResponseWriter) {
 	var jsonReq = ReqId{}
 	unmarshalError := json.Unmarshal(decoder, &jsonReq)
 	if unmarshalError != nil {
-		log.Fatal(unmarshalError)
+		return unmarshalError
 	}
 
 	if jsonReq.Id == "" {
 		http.Error(responseWriter, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 	} else {
 		var id = jsonReq.Id
-		var removed = removeInfo(id)
+		var removed = removeInfo(id, sqlInstance)
 		if removed {
 			http.Error(responseWriter, http.StatusText(http.StatusOK), http.StatusOK)
 			responseWriter.WriteHeader(200)
@@ -470,33 +465,44 @@ func methodDelete(decoder []byte, responseWriter http.ResponseWriter) {
 
 	}
 
+	return nil
+
 }
 func main() {
 	var server = func(w http.ResponseWriter, r *http.Request) {
 		db, dateBaseError := sql.Open("sqlite3", dbName)
 		if dateBaseError != nil {
-			log.Fatal(dateBaseError)
+			panic(dateBaseError)
 		}
 		_, errCheckDb := db.Query("SELECT * FROM req_and_response")
 		if errCheckDb != nil {
-			createTable()
+			createTable(db)
 		}
 
 		decoder, errReadAll := ioutil.ReadAll(r.Body)
 		if errReadAll != nil {
-			log.Fatal(dateBaseError)
+			panic(errReadAll)
 		}
 
 		if r.Method == http.MethodPost {
-			methodPost(decoder, w)
+			ErrorMethodPost := methodPost(decoder, w, db)
+			if ErrorMethodPost != nil {
+				panic(ErrorMethodPost)
+			}
 		}
 
 		if r.Method == http.MethodGet {
-			methodGet(decoder, w)
+			ErrorMethodGet := methodGet(decoder, w, db)
+			if ErrorMethodGet != nil {
+				panic(ErrorMethodGet)
+			}
 		}
 
 		if r.Method == http.MethodDelete {
-			methodDelete(decoder, w)
+			ErrorMethodDelete := methodDelete(decoder, w, db)
+			if ErrorMethodDelete != nil {
+				panic(ErrorMethodDelete)
+			}
 		}
 
 	}
@@ -509,17 +515,17 @@ func main() {
 
 }
 
-func HttpRequest(method string, url string, headers map[string]string, body map[string]string) *http.Response {
+func HttpRequest(method string, url string, headers map[string]string, body map[string]string) (*http.Response, error) {
 	/*
 		Отправляет запрос по указанному url
 	*/
-
+	var ErrorHttpRequest error
 	client := &http.Client{}
 	if method == "GET" && len(body) == 0 {
 		req, reqError := http.NewRequest(method, url, nil)
 
 		if reqError != nil {
-			log.Fatal(reqError)
+			ErrorHttpRequest = reqError
 		}
 
 		if headers != nil {
@@ -530,22 +536,22 @@ func HttpRequest(method string, url string, headers map[string]string, body map[
 		resp, doError := client.Do(req)
 
 		if doError != nil {
-			log.Fatal(doError)
+			ErrorHttpRequest = doError
 		}
 
-		return resp
+		return resp, ErrorHttpRequest
 
 	} else if method == "POST" {
 		out, jsonError := json.Marshal(body)
 
 		if jsonError != nil {
-			log.Fatal(jsonError)
+			ErrorHttpRequest = jsonError
 		}
 
 		req, reqError := http.NewRequest(method, url, bytes.NewBuffer(out))
 
 		if reqError != nil {
-			log.Fatal(reqError)
+			ErrorHttpRequest = reqError
 		}
 
 		if headers != nil {
@@ -556,14 +562,17 @@ func HttpRequest(method string, url string, headers map[string]string, body map[
 		resp, doError2 := client.Do(req)
 
 		if doError2 != nil {
-			log.Fatal(doError2)
+			ErrorHttpRequest = doError2
 		}
 
-		return resp
+		return resp, ErrorHttpRequest
+
 	} else if method != "" && url != "" {
-		panic("Метод GET не может иметь тело сообщения. Используйте POST, если вы хотите отправить данные на сервер.")
+		resp := &http.Response{Status: "400 Bad Request", StatusCode: 400}
+		return resp, nil
 	} else {
-		panic("Поля method и url не заполнены, исправьте ошибку и повторите попытку снова")
+		resp := &http.Response{Status: "400 Bad Request", StatusCode: 400}
+		return resp, nil
 	}
 
 }
