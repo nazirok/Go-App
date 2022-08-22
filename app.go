@@ -87,7 +87,7 @@ func uuid() string {
 	return uuid
 }
 
-func createTable(sqlInstance *sql.DB) {
+func createTable(sqlInstance *sql.DB) error {
 	/*
 		Создает таблицу req_and_response
 	*/
@@ -104,18 +104,19 @@ func createTable(sqlInstance *sql.DB) {
         "Url" TEXT);`
 	query, prepareError := sqlInstance.Prepare(users_table)
 	if prepareError != nil {
-		log.Fatal(prepareError)
+		return prepareError
 	}
 	_, execError := query.Exec()
 
 	if execError != nil {
-		log.Fatal(execError)
+		return execError
 	}
 
 	fmt.Println("Table created successfully!")
+	return nil
 }
 
-func fetchRequests(sqlInstance *sql.DB) []map[string]any {
+func fetchRequests(sqlInstance *sql.DB) ([]map[string]any, error) {
 	/*
 		Выкачивает всю инфу из БД
 	*/
@@ -124,14 +125,15 @@ func fetchRequests(sqlInstance *sql.DB) []map[string]any {
 	record, queryError := sqlInstance.Query("SELECT * FROM req_and_response")
 
 	if queryError != nil {
-		log.Fatal(queryError)
+		return results, queryError
 	}
 
 	defer func(record *sql.Rows) {
 		err := record.Close()
 		if err != nil {
-
+			panic(err)
 		}
+
 	}(record)
 
 	for record.Next() {
@@ -148,7 +150,7 @@ func fetchRequests(sqlInstance *sql.DB) []map[string]any {
 		scanError := record.Scan(&id, &IdReq, &HeadersResp, &Length, &Status, &HeadersReq, &Body, &Method, &Url)
 
 		if scanError != nil {
-			log.Fatal(scanError)
+			return results, scanError
 		}
 
 		//var res = map[string]any{id, IdReq, HeadersResp, Length, Status, HeadersReq, Body, Method, Url}
@@ -164,18 +166,18 @@ func fetchRequests(sqlInstance *sql.DB) []map[string]any {
 		results = append(results, res)
 	}
 
-	return results
+	return results, nil
 
 }
 
-func removeInfo(id string, sqlInstance *sql.DB) bool {
+func removeInfo(id string, sqlInstance *sql.DB) (bool, error) {
 	/*
 		Удаляет запрос из Бд по id
 	*/
 
-	var idDb = IdFromDb(id, sqlInstance)
+	var idDb, ErrorIdFromDb = IdFromDb(id, sqlInstance)
 	if idDb == -1 {
-		return false
+		return false, ErrorIdFromDb
 	} else {
 
 		var deleteReq = fmt.Sprintf("delete from req_and_response where id = %d", idDb)
@@ -186,7 +188,7 @@ func removeInfo(id string, sqlInstance *sql.DB) bool {
 			log.Fatal(execError)
 		}
 
-		return true
+		return true, ErrorIdFromDb
 
 	}
 
@@ -245,38 +247,39 @@ func jsonResp(data map[string]any) []byte {
 
 }
 
-func searchById(id string, sqlInstance *sql.DB) []byte {
+func searchById(id string, sqlInstance *sql.DB) ([]byte, error) {
 	/*
 		Делает поиск внутри БД по id, если id совпадают, возвращает сохраненный с ним request+response
 	*/
 
-	var requests = fetchRequests(sqlInstance)
+	var requests, ErrorfetchRequests = fetchRequests(sqlInstance)
 
 	for _, requestIter := range requests {
 		if requestIter["IdReq"] == id {
-			return jsonResp(requestIter)
+
+			return jsonResp(requestIter), ErrorfetchRequests
 		}
 
 	}
-	return nil
+	return nil, ErrorfetchRequests
 
 }
 
-func IdFromDb(id string, sqlInstance *sql.DB) int {
+func IdFromDb(id string, sqlInstance *sql.DB) (int, error) {
 	/*
 		Делает поиск внутри БД по id, если id совпадают, возвращает id строки из БД
 	*/
 
-	var requests = fetchRequests(sqlInstance)
+	var requests, ErrorfetchRequests = fetchRequests(sqlInstance)
 
 	for _, requestIter := range requests {
 		if requestIter["IdReq"] == id {
-			return requestIter["id"].(int)
+			return requestIter["id"].(int), ErrorfetchRequests
 		}
 
 	}
 
-	return -1
+	return -1, ErrorfetchRequests
 
 }
 
@@ -284,10 +287,13 @@ func CacheLRU(request Request, sqlInstance *sql.DB) ([]byte, error) {
 	/*
 		Проверяет, существует ли подобный request в БД, если да, возвращает request+response
 	*/
-	var ErrorCacheLRU error
+
 	var headers = fmt.Sprintf("%s", request.Headers)
 	var body = fmt.Sprintf("%s", request.Body)
-	var requests = fetchRequests(sqlInstance)
+	var requests, ErrorfetchRequests = fetchRequests(sqlInstance)
+	if ErrorfetchRequests != nil {
+		return nil, ErrorfetchRequests
+	}
 	for _, requestIter := range requests {
 		var methodLocal = (requestIter["Method"]).(string)
 		var urlLocal = (requestIter["Url"]).(string)
@@ -299,7 +305,7 @@ func CacheLRU(request Request, sqlInstance *sql.DB) ([]byte, error) {
 		var unmarshalError = json.Unmarshal(requestIter["Body"].([]byte), &bodyLocal)
 
 		if unmarshalError != nil {
-			ErrorCacheLRU = unmarshalError
+			return nil, unmarshalError
 		}
 
 		var headerstLocalString = fmt.Sprintf("%s", headerstLocal)
@@ -308,16 +314,16 @@ func CacheLRU(request Request, sqlInstance *sql.DB) ([]byte, error) {
 			if urlLocal == request.Url {
 				if GetMD5Hash(headerstLocalString) == GetMD5Hash(headers) {
 					if GetMD5Hash(bodyLocalString) == GetMD5Hash(body) {
-						return jsonResp(requestIter), ErrorCacheLRU
+						return jsonResp(requestIter), nil
 					} else if len(body) == 0 && bodyLocal == nil {
-						return jsonResp(requestIter), ErrorCacheLRU
+						return jsonResp(requestIter), nil
 					}
 
 				} else if len(headers) == 0 && headerstLocal == nil {
 					if GetMD5Hash(bodyLocalString) == GetMD5Hash(body) {
-						return jsonResp(requestIter), ErrorCacheLRU
+						return jsonResp(requestIter), nil
 					} else if len(body) == 0 && bodyLocal == nil {
-						return jsonResp(requestIter), ErrorCacheLRU
+						return jsonResp(requestIter), nil
 					}
 
 				}
@@ -328,7 +334,7 @@ func CacheLRU(request Request, sqlInstance *sql.DB) ([]byte, error) {
 
 	}
 
-	return nil, ErrorCacheLRU
+	return nil, nil
 
 }
 
@@ -424,7 +430,10 @@ func methodGet(decoder []byte, responseWriter http.ResponseWriter, sqlInstance *
 	if jsonReq.Id == "" {
 		http.Error(responseWriter, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 	} else {
-		var text = searchById(jsonReq.Id, sqlInstance)
+		var text, ErrorsearchById = searchById(jsonReq.Id, sqlInstance)
+		if ErrorsearchById != nil {
+			return ErrorsearchById
+		}
 		if text == nil {
 			http.Error(responseWriter, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		} else {
@@ -455,7 +464,10 @@ func methodDelete(decoder []byte, responseWriter http.ResponseWriter, sqlInstanc
 		http.Error(responseWriter, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 	} else {
 		var id = jsonReq.Id
-		var removed = removeInfo(id, sqlInstance)
+		var removed, ErrorRemoveInfo = removeInfo(id, sqlInstance)
+		if ErrorRemoveInfo != nil {
+			return ErrorRemoveInfo
+		}
 		if removed {
 			http.Error(responseWriter, http.StatusText(http.StatusOK), http.StatusOK)
 			responseWriter.WriteHeader(200)
@@ -476,7 +488,10 @@ func main() {
 		}
 		_, errCheckDb := db.Query("SELECT * FROM req_and_response")
 		if errCheckDb != nil {
-			createTable(db)
+			ErrorCreateTable := createTable(db)
+			if ErrorCreateTable != nil {
+				panic(ErrorCreateTable)
+			}
 		}
 
 		decoder, errReadAll := ioutil.ReadAll(r.Body)
