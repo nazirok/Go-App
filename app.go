@@ -1,16 +1,29 @@
 package main
 
 import (
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"log"
+)
+
+/*
+Что нужно сделать дальше:
+1 добавить асинхронную обработку запросов. Лучше сделать через пулл воркеров. Нужно почитать что такое асинхронная обработка
+, пелл воркеров и как делается в go
+2 работу с сторонними сервисами сделать через интерфейсы(это база, кэш и т.д). например также можно вынести в отдельную сущность
+отправитель запросов и рабооать с ним через интерфейс.
+3 после выполнения пункта 3 добавить тесты на функционал
+4 добавить go модули
+*/
+
+import (
 	"bytes"
 	"crypto/md5"
 	"crypto/rand"
-	"database/sql"
 	"encoding/hex"
-	"encoding/json"
-	"fmt"
 	_ "github.com/mattn/go-sqlite3"
 	"io/ioutil"
-	"log"
 	"net/http"
 )
 
@@ -482,11 +495,23 @@ func methodDelete(decoder []byte, responseWriter http.ResponseWriter, sqlInstanc
 }
 func main() {
 	var server = func(w http.ResponseWriter, r *http.Request) {
+		/*
+			1 инифиализацию базы не нужно делать в хэндлере.
+			2 тут на каждый запрос заново открывается база
+
+			инифиализацию базы лучше вынести в отдельный метод. Инифиализировать один раз и все.\
+			Также лучше для приложения завести отдельную структуру в которой будет хранится интстанс базы и который будет иметь хэндлеры
+		*/
 		db, dateBaseError := sql.Open("sqlite3", dbName)
 		if dateBaseError != nil {
 			panic(dateBaseError)
 		}
 		_, errCheckDb := db.Query("SELECT * FROM req_and_response")
+		/*
+			ошибка не всегда значит что таблицы нет. Тут нужно именно на существование таблицы проверять, или дулать через
+			механизм миграций
+
+		*/
 		if errCheckDb != nil {
 			ErrorCreateTable := createTable(db)
 			if ErrorCreateTable != nil {
@@ -498,10 +523,15 @@ func main() {
 		if errReadAll != nil {
 			panic(errReadAll)
 		}
+		// после обработки запроса боди надо закрывать.
 
 		if r.Method == http.MethodPost {
 			ErrorMethodPost := methodPost(decoder, w, db)
+			// в go для ошибки обычно используют переменную err, и не обязательно всегда для ошибки новую переменную объявлять
 			if ErrorMethodPost != nil {
+				/*
+					конкретно тут лучше не падать а возвращать конкретную Http ошибку клиенту
+				*/
 				panic(ErrorMethodPost)
 			}
 		}
@@ -536,6 +566,12 @@ func HttpRequest(method string, url string, headers map[string]string, body map[
 	*/
 	var ErrorHttpRequest error
 	client := &http.Client{}
+	/*
+		1 клиент на каждый запрос не нужно новый. Можно его один раз инициализировать и держать инстанс, например в общей
+		стурктуре приложения.
+		2 также нужно определить енекторые таймауты для клиента. Сейчас если сервис недоступен то клиент будет пытаться 'вечно'
+		достучаться
+	*/
 	if method == "GET" && len(body) == 0 {
 		req, reqError := http.NewRequest(method, url, nil)
 
